@@ -1,0 +1,56 @@
+import type { AuditEntry, AuditEventRecord, AuditLogWriter } from "./persistence/types.js";
+
+// Append-only custody log (spec §8, §18): every detection, verdict, case and
+// transition is recorded — including discards and failures. Custody invariant:
+// datos carries sha256 + references only, never signing keys or capture bytes.
+
+export const AUDIT_EVENTOS = [
+    "detection_recibida",
+    "detection_verificada",
+    "detection_descartada",
+    "detection_error",
+    "expediente_creado",
+    "expediente_actualizado",
+    "expediente_descartado",
+    "transicion_estado",
+] as const;
+export type AuditEventName = (typeof AUDIT_EVENTOS)[number];
+
+export interface AuditAppend {
+    evento: AuditEventName;
+    minSim: number | null;
+    expedienteId?: string | null;
+    /** Links detection -> verification -> case events of one processing chain. */
+    correlationId: string;
+    datos?: Record<string, unknown>;
+}
+
+export class AuditService {
+    private readonly writer: AuditLogWriter;
+    private readonly now: () => Date;
+
+    constructor(writer: AuditLogWriter, now: () => Date = () => new Date()) {
+        this.writer = writer;
+        this.now = now;
+    }
+
+    append(input: AuditAppend): Promise<AuditEntry> {
+        const record: AuditEventRecord = {
+            ts_iso: this.now().toISOString(),
+            min_sim: input.minSim,
+            evento: input.evento,
+            expediente_id: input.expedienteId ?? null,
+            correlation_id: input.correlationId,
+            datos: input.datos ?? {},
+        };
+        return this.writer.append(record);
+    }
+
+    tail(n: number): Promise<AuditEntry[]> {
+        return this.writer.tail(n);
+    }
+
+    readAll(): Promise<AuditEntry[]> {
+        return this.writer.readAll();
+    }
+}
