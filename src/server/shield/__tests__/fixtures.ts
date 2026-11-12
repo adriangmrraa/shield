@@ -116,3 +116,71 @@ export const sharedDns: PassiveDnsByIp = {
         "feria-artesanal.example",
     ],
 };
+
+// Detections shaped like the real practice scenario (escenario_practica.json).
+
+export const pelotayaS1 = (id: string, minuto: number): Detection =>
+    detection({ id, minuto });
+
+export const pelotayaS2 = (id: string, minuto: number): Detection =>
+    detection({
+        id,
+        minuto,
+        stream_url: "https://s2.pelotaya.test/hls/en-vivo/index.m3u8",
+        host_stream: "s2.pelotaya.test",
+        ip_servidor: "203.0.113.11",
+    });
+
+export const golazoLibre = (id: string, minuto: number): Detection =>
+    detection({
+        id,
+        minuto,
+        pagina: "https://golazo-libre.test/partido",
+        stream_url: "https://live.golazo-libre.test/hls/en-vivo/index.m3u8",
+        host_stream: "live.golazo-libre.test",
+        ip_servidor: "198.51.100.20",
+        asn: 64610,
+        marca_de_agua_extraida: "LP26-PRA-OFI-S077310",
+    });
+
+export const canalNorte = (id: string, minuto: number): Detection =>
+    detection({
+        id,
+        minuto,
+        pagina: "https://canalnorte.test/en-vivo",
+        stream_url: "https://envivo.canalnorte.test/hls/en-vivo/index.m3u8",
+        host_stream: "envivo.canalnorte.test",
+        ip_servidor: "192.0.2.10",
+        asn: 64640,
+        marca_de_agua_extraida: "LP26-PRA-LIC-NORTE",
+    });
+
+export const resumenes = (id: string, minuto: number): Detection =>
+    detection({
+        id,
+        minuto,
+        pagina: "https://resumenes-deportivos.test/fecha-3",
+        stream_url: "https://vod.resumenes-deportivos.test/hls/fecha-3/index.m3u8",
+        host_stream: "vod.resumenes-deportivos.test",
+        ip_servidor: "198.51.100.90",
+        asn: 64630,
+        marca_de_agua_extraida: "LP25-F03-OFI-S102934",
+    });
+
+/** Passive DNS answers matching the practice scenario above. */
+export const practiceDns: Record<string, PassiveDnsByIp | null> = {
+    "203.0.113.10": dedicatedDns,
+    "203.0.113.11": {
+        ip: "203.0.113.11",
+        asn: 64600,
+        organizacion: "Bruma Hosting Dedicado (ficticio)",
+        dominios: ["s2.pelotaya.test"],
+    },
+    "198.51.100.20": sharedDns,
+    "192.0.2.10": {
+        ip: "192.0.2.10",
+        asn: 64640,
+        organizacion: "Norte Medios CDN (ficticia)",
+        dominios: ["envivo.canalnorte.test", "canalnorte.test"],
+    },
+};

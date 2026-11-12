@@ -13,6 +13,7 @@
     "test": "vitest run src",
     "shield:smoke": "tsx scripts/shield-smoke.ts",
     "shield:classify": "tsx scripts/shield-classify.ts",
+    "shield:cases": "tsx scripts/shield-cases.ts",
     "db:generate": "npx drizzle-kit generate",
     "db:migrate": "npx drizzle-kit migrate",
     "db:push": "npx drizzle-kit push",
