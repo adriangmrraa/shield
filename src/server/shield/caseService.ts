@@ -46,6 +46,12 @@ export interface TransitionMeta {
     minSim: number | null;
     motivo?: string;
     correlationId?: string;
+    /**
+     * Extra fields persisted atomically with the transition (e.g. approved_by /
+     * approved_min on judicial approval) — applied to the case before save so
+     * the decision and its metadata can never diverge on disk.
+     */
+    patch?: Partial<Expediente>;
 }
 
 export interface CaseServiceDeps {
@@ -142,6 +148,7 @@ export class CaseService {
             meta.minSim,
             meta.correlationId ?? `${expedienteId}->${hacia}`,
             meta.motivo,
+            meta.patch,
         );
         return expediente;
     }
@@ -160,10 +167,12 @@ export class CaseService {
         minSim: number | null,
         correlationId: string,
         motivo?: string,
+        patch?: Partial<Expediente>,
     ): Promise<void> {
         const desde = expediente.estado;
         assertTransition(desde, hacia);
         expediente.estado = hacia;
+        if (patch) Object.assign(expediente, patch);
         expediente.ultima_transicion = {
             desde,
             hacia,
@@ -252,6 +261,12 @@ export class CaseService {
                 motivo: m.motivo,
             })),
             vence_min_propuesto: ctx.venceMin,
+            asignado_juez_id: null,
+            approved_by: null,
+            approved_min: null,
+            rejected_by: null,
+            rejected_min: null,
+            reject_motivo: null,
             estado: "recibido",
             fuente: FUENTE_QUALYDATA_SIM,
             reason_codes: [...result.reasonCodes],

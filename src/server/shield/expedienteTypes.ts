@@ -127,6 +127,19 @@ export const expedienteSchema = z.object({
     medidas_por_isp: z.array(medidaPorIspSchema),
     /** Proposed block expiry: the match's fin_min. */
     vence_min_propuesto: z.number(),
+    /**
+     * Judge this pendiente_juez case is assigned to — always the judge on
+     * shift when the tray is synced. null until first sync; only the assignee
+     * may sign. Reassigned on every shift change (audit: expediente_reasignado).
+     */
+    asignado_juez_id: z.string().nullable().default(null),
+    /** Explicit judicial approval, persisted per spec §9. */
+    approved_by: z.string().nullable().default(null),
+    approved_min: z.number().nullable().default(null),
+    /** Explicit judicial rejection: motivo is mandatory on reject. */
+    rejected_by: z.string().nullable().default(null),
+    rejected_min: z.number().nullable().default(null),
+    reject_motivo: z.string().nullable().default(null),
     estado: estadoExpedienteSchema,
     fuente: z.string(),
     /** Full verdict trail for custody: every reasonCode the engine emitted. */

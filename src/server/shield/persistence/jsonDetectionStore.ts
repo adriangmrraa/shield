@@ -39,6 +39,10 @@ export class JsonDetectionStore implements DetectionStore {
         return (await this.load()).seen.has(id);
     }
 
+    async seenIds(): Promise<string[]> {
+        return [...(await this.load()).seen];
+    }
+
     saveCursor(minute: number): Promise<void> {
         return this.queue.run(async () => {
             const state = await this.load();

@@ -1,5 +1,6 @@
 import type { DetectionStore } from "../detectionPoller.js";
 import type { Expediente, EstadoExpediente } from "../expedienteTypes.js";
+import type { ShieldOrder, ShieldUser } from "../judicialTypes.js";
 
 // Persistence contracts. The JSON/JSONL implementation under data/shield/ is
 // swappable for a Drizzle/Postgres backend later — domain code only sees these.
@@ -47,10 +48,29 @@ export interface EvidenceStore {
     get(ref: string): Promise<Buffer | null>;
 }
 
+export interface UserRepository {
+    getByUsername(username: string): Promise<ShieldUser | null>;
+    getByJuezId(juezId: string): Promise<ShieldUser | null>;
+    list(): Promise<ShieldUser[]>;
+    /** Replaces the whole user set (seed writes it atomically). */
+    saveAll(users: ShieldUser[]): Promise<void>;
+}
+
+export interface OrderRepository {
+    getById(ordenId: string): Promise<ShieldOrder | null>;
+    list(): Promise<ShieldOrder[]>;
+    listByExpediente(expedienteId: string): Promise<ShieldOrder[]>;
+    listByEstado(estado: ShieldOrder["estado"]): Promise<ShieldOrder[]>;
+    /** Upsert by orden_id. */
+    save(order: ShieldOrder): Promise<void>;
+}
+
 export interface ShieldPersistence {
     dir: string;
     detections: DetectionStore;
     cases: CaseRepository;
     audit: AuditLogWriter;
     evidence: EvidenceStore;
+    users: UserRepository;
+    orders: OrderRepository;
 }
