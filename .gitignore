@@ -13,3 +13,9 @@ Notas-Radio-Uno/
 next-env.d.ts
 
 /src/generated/prisma
+
+# --- Shield hackathon ---
+tools/
+salida/
+config/juzgados.demo.json
+PeriodistApp Shield — Especificación ejecutable para agente de código *.md
