@@ -14,6 +14,8 @@ export interface DetectionStore {
     saveCursor(minute: number): void | Promise<void>;
     hasSeen(id: string): boolean | Promise<boolean>;
     markSeen(id: string): void | Promise<void>;
+    /** Optional listing of every seen id (metrics/status views). */
+    seenIds?(): string[] | Promise<string[]>;
 }
 
 export class InMemoryDetectionStore implements DetectionStore {
@@ -31,6 +33,9 @@ export class InMemoryDetectionStore implements DetectionStore {
     }
     markSeen(id: string): void {
         this.seen.add(id);
+    }
+    seenIds(): string[] {
+        return [...this.seen];
     }
 }
 

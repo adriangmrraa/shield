@@ -1,11 +1,14 @@
 import type { EstadoExpediente, Expediente } from "../expedienteTypes.js";
+import type { ShieldOrder, ShieldUser } from "../judicialTypes.js";
 import type {
     AuditEntry,
     AuditEventRecord,
     AuditLogWriter,
     CaseRepository,
     EvidenceStore,
+    OrderRepository,
     ShieldPersistence,
+    UserRepository,
 } from "../persistence/types.js";
 import type { DetectionStore } from "../detectionPoller.js";
 
@@ -108,14 +111,67 @@ export class MemDetectionStore implements DetectionStore {
     markSeen(id: string): void {
         this.seen.add(id);
     }
+    seenIds(): string[] {
+        return [...this.seen];
+    }
 }
 
-export function memPersistence(): ShieldPersistence & { audit: MemAuditLog; cases: MemCaseRepository } {
+export class MemUserRepository implements UserRepository {
+    readonly users = new Map<string, ShieldUser>();
+
+    getByUsername(username: string): Promise<ShieldUser | null> {
+        return Promise.resolve(this.users.get(username) ?? null);
+    }
+    getByJuezId(juezId: string): Promise<ShieldUser | null> {
+        for (const user of this.users.values()) {
+            if (user.juez_id === juezId) return Promise.resolve(user);
+        }
+        return Promise.resolve(null);
+    }
+    list(): Promise<ShieldUser[]> {
+        return Promise.resolve([...this.users.values()]);
+    }
+    saveAll(users: ShieldUser[]): Promise<void> {
+        this.users.clear();
+        for (const user of users) this.users.set(user.username, user);
+        return Promise.resolve();
+    }
+}
+
+export class MemOrderRepository implements OrderRepository {
+    readonly orders = new Map<string, ShieldOrder>();
+
+    getById(ordenId: string): Promise<ShieldOrder | null> {
+        return Promise.resolve(this.orders.get(ordenId) ?? null);
+    }
+    list(): Promise<ShieldOrder[]> {
+        return Promise.resolve([...this.orders.values()]);
+    }
+    listByExpediente(expedienteId: string): Promise<ShieldOrder[]> {
+        return Promise.resolve([...this.orders.values()].filter((o) => o.expediente_id === expedienteId));
+    }
+    listByEstado(estado: ShieldOrder["estado"]): Promise<ShieldOrder[]> {
+        return Promise.resolve([...this.orders.values()].filter((o) => o.estado === estado));
+    }
+    save(order: ShieldOrder): Promise<void> {
+        this.orders.set(order.orden_id, order);
+        return Promise.resolve();
+    }
+}
+
+export function memPersistence(): ShieldPersistence & {
+    audit: MemAuditLog;
+    cases: MemCaseRepository;
+    users: MemUserRepository;
+    orders: MemOrderRepository;
+} {
     return {
         dir: ":memory:",
         detections: new MemDetectionStore(),
         cases: new MemCaseRepository(),
         audit: new MemAuditLog(),
         evidence: new MemEvidenceStore(),
+        users: new MemUserRepository(),
+        orders: new MemOrderRepository(),
     };
 }

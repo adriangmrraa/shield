@@ -13,6 +13,13 @@ export const AUDIT_EVENTOS = [
     "expediente_actualizado",
     "expediente_descartado",
     "transicion_estado",
+    "auth_login",
+    "auth_login_rechazado",
+    "expediente_reasignado",
+    "expediente_aprobado",
+    "expediente_rechazado",
+    "orden_compuesta",
+    "firma_bloqueada_fuera_de_turno",
 ] as const;
 export type AuditEventName = (typeof AUDIT_EVENTOS)[number];
 

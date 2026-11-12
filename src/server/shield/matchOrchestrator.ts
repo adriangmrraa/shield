@@ -80,6 +80,10 @@ export class MatchOrchestrator {
         return this.caseService;
     }
 
+    get pollerRunning(): boolean {
+        return this.poller.isRunning;
+    }
+
     private match(): Promise<MatchInfo> {
         this.matchPromise ??= this.client.partido();
         return this.matchPromise;
