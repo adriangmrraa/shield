@@ -60,6 +60,7 @@ export function createShieldApp(deps: ShieldAppDeps): Express {
 
     const app = express();
     app.disable("x-powered-by");
+    app.use(cors());
     app.use(express.json());
     app.use(
         "/api/shield",
@@ -71,12 +72,19 @@ export function createShieldApp(deps: ShieldAppDeps): Express {
             guard,
             orderService,
             caseService,
-            signing: deps.signing,
             orchestrator: deps.orchestrator ?? null,
         }),
     );
     app.get("/api/shield-health", (_req, res) => {
         res.json({ ok: true, simulador: deps.sim !== null });
+    });
+    // Malformed JSON bodies must answer JSON too (body-parser throws before routes).
+    app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+        if (err && typeof err === "object" && (err as { type?: string }).type === "entity.parse.failed") {
+            res.status(400).json({ error: "BAD_JSON", detail: "cuerpo JSON inválido" });
+            return;
+        }
+        next(err);
     });
     return app;
 }

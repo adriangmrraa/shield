@@ -16,7 +16,7 @@ import type { ShieldPersistence } from "./persistence/types.js";
 import { SimulatorHttpError, SimulatorNetworkError } from "./qualydataClient.js";
 import { requireJudge, ShieldAuthService } from "./shieldAuth.js";
 import { OutOfShiftError, ShiftGuard } from "./shiftGuard.js";
-import { SigningConfigError, SigningService, UnknownJudgeError } from "./signingService.js";
+import { SigningConfigError, UnknownJudgeError } from "./signingService.js";
 import type { CourtInfo, DetectionsPage, Provider, SimulatorState } from "./types.js";
 
 // Own API (spec §12): /api/shield/*. POST /auth/login is the only public route;
@@ -40,7 +40,6 @@ export interface ShieldRouterDeps {
     guard: ShiftGuard;
     orderService: OrderService;
     caseService: CaseService;
-    signing: SigningService;
     orchestrator?: MatchOrchestrator | null;
 }
 
