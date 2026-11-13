@@ -1,15 +1,19 @@
+import type { Server as HttpServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import cors from "cors";
 import express, { type Express } from "express";
 import { AuditService } from "./auditService.js";
 import { CaseService } from "./caseService.js";
 import { MatchOrchestrator } from "./matchOrchestrator.js";
+import { computeMetrics } from "./metricsService.js";
 import { OrderService, type SimulatorClock } from "./orderService.js";
 import { DEFAULT_SHIELD_DATA_DIR, openJsonPersistence } from "./persistence/index.js";
 import type { ShieldPersistence } from "./persistence/types.js";
 import { ProviderDispatcher } from "./providerDispatcher.js";
 import { QualyDataClient } from "./qualydataClient.js";
-import { requireJwtSecret, ShieldAuthService } from "./shieldAuth.js";
+import { requireJudge, requireJwtSecret, ShieldAuthService } from "./shieldAuth.js";
+import { instrumentPersistence, ShieldEventBus } from "./shieldRealtime.js";
+import { attachShieldSocket, SHIELD_SOCKET_PATH, type ShieldSocketHandle } from "./shieldSocket.js";
 import { createShieldRouter, type ShieldSimApi } from "./shieldRoutes.js";
 import { ShiftGuard } from "./shiftGuard.js";
 import { SigningService } from "./signingService.js";
@@ -85,6 +89,12 @@ export function createShieldApp(deps: ShieldAppDeps): Express {
             dispatch: deps.dispatch ?? null,
         }),
     );
+    // Shift table for the tray countdown — /api/shield routes fall through to
+    // here only when the mounted router didn't handle them (router still runs
+    // requireJudge first on every /api/shield/* request).
+    app.get("/api/shield/turnos", requireJudge(deps.jwtSecret), (_req, res) => {
+        res.json({ turnos: deps.signing.turnos() });
+    });
     app.get("/api/shield-health", (_req, res) => {
         res.json({ ok: true, simulador: deps.sim !== null });
     });
@@ -109,6 +119,8 @@ export interface DevServerOptions {
     orchestrator?: MatchOrchestrator | null;
     /** Explicit dispatch runtime; default builds one when sim is a QualyDataClient. */
     dispatch?: DispatchRuntime | null;
+    /** Realtime bus; a fresh one is created when not supplied. */
+    events?: ShieldEventBus;
     dispatcherIntervalMs?: number;
     trackerIntervalMs?: number;
     retryDelayMs?: number;
@@ -120,8 +132,11 @@ export interface ShieldRuntime {
     persistence: ShieldPersistence;
     sim: ShieldSimApi | null;
     signing: SigningService;
+    jwtSecret: string;
     orchestrator: MatchOrchestrator | null;
     dispatch: DispatchRuntime | null;
+    /** Domain-event bus feeding Socket.IO; already wired into persistence. */
+    events: ShieldEventBus;
 }
 
 /**
@@ -134,6 +149,10 @@ export async function createShieldRuntime(options: DevServerOptions = {}): Promi
         (await openJsonPersistence(options.dataDir ?? process.env.SHIELD_DATA_DIR ?? DEFAULT_SHIELD_DATA_DIR));
     const signing = await SigningService.fromEnv();
     const jwtSecret = requireJwtSecret();
+    // Instrument BEFORE building services: orchestrator/dispatch/routes must see
+    // the wrapped audit + detection stores so their work publishes socket events.
+    const events = options.events ?? new ShieldEventBus();
+    instrumentPersistence(persistence, events);
 
     let sim: ShieldSimApi | null;
     if (options.sim !== undefined) {
@@ -200,7 +219,7 @@ export async function createShieldRuntime(options: DevServerOptions = {}): Promi
         orchestrator,
         dispatch,
     });
-    return { app, persistence, sim, signing, orchestrator, dispatch };
+    return { app, persistence, sim, signing, jwtSecret, orchestrator, dispatch, events };
 }
 
 /** Wires the production bundle from env: persistence + signing + optional sim. */
@@ -208,16 +227,63 @@ export async function createDevServer(options: DevServerOptions = {}): Promise<E
     return (await createShieldRuntime(options)).app;
 }
 
+/** Same report as GET /api/shield/metrics — periodic snapshot for shield:metrics. */
+async function metricsSnapshot(
+    persistence: ShieldPersistence,
+    sim: ShieldSimApi | null,
+    orchestrator: MatchOrchestrator | null,
+): Promise<Record<string, unknown>> {
+    const casos = await persistence.cases.list();
+    const casosPorEstado: Record<string, number> = {};
+    for (const exp of casos) casosPorEstado[exp.estado] = (casosPorEstado[exp.estado] ?? 0) + 1;
+    const orders = await persistence.orders.list();
+    const ordenesPorEstado: Record<string, number> = {};
+    for (const order of orders) ordenesPorEstado[order.estado] = (ordenesPorEstado[order.estado] ?? 0) + 1;
+    const seen = persistence.detections.seenIds ? await persistence.detections.seenIds() : null;
+    const auditEventos: Record<string, number> = {};
+    for (const entry of await persistence.audit.readAll()) {
+        auditEventos[entry.evento] = (auditEventos[entry.evento] ?? 0) + 1;
+    }
+    return {
+        casos_por_estado: casosPorEstado,
+        ordenes_por_estado: ordenesPorEstado,
+        detecciones_vistas: seen?.length ?? null,
+        audit_eventos: auditEventos,
+        orchestrator: orchestrator ? await orchestrator.status() : null,
+        isp: sim ? computeMetrics({ orders, expedientes: casos, providers: await sim.proveedores() }) : null,
+    };
+}
+
+/**
+ * Socket.IO on the same HTTP server (S7). Returns the handle so callers own the
+ * lifecycle; emissions stop with the run loops because they are all sourced
+ * from the audited write path.
+ */
+export function attachShieldRealtime(
+    httpServer: HttpServer,
+    runtime: Pick<ShieldRuntime, "jwtSecret" | "persistence" | "sim" | "orchestrator" | "events">,
+): ShieldSocketHandle {
+    return attachShieldSocket(httpServer, {
+        jwtSecret: runtime.jwtSecret,
+        bus: runtime.events,
+        metricsSnapshot: () => metricsSnapshot(runtime.persistence, runtime.sim, runtime.orchestrator),
+        running: () => runtime.orchestrator?.pollerRunning ?? false,
+        corsOrigin: process.env.SHIELD_SOCKET_ORIGIN ?? true,
+    });
+}
+
 async function main(): Promise<void> {
     const { config } = await import("dotenv");
     config();
 
-    const app = await createDevServer();
+    const runtime = await createShieldRuntime();
     const port = Number(process.env.PORT ?? 3000);
-    app.listen(port, () => {
+    const server = runtime.app.listen(port, () => {
         console.log(`[shield:dev] API judicial en http://localhost:${port}/api/shield`);
+        console.log(`[shield:dev] Socket.IO en http://localhost:${port}${SHIELD_SOCKET_PATH}`);
         console.log("[shield:dev] login: POST /api/shield/auth/login (seed: npm run shield:seed)");
     });
+    attachShieldRealtime(server, runtime);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
