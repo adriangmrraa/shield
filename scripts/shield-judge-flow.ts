@@ -1,5 +1,7 @@
 import { createHmac } from "node:crypto";
 import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import * as dotenv from "dotenv";
 dotenv.config();
 
@@ -57,7 +59,7 @@ async function postJson(base: string, path: string, body: unknown, token?: strin
 }
 
 async function main(): Promise<void> {
-    const dataDir = await fs.mkdtemp("judge-flow-");
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "shield-judge-flow-"));
     const bundle = await loadSigningBundle();
     const persistence = await openJsonPersistence(dataDir);
     await seedUsers(persistence.users, bundle);

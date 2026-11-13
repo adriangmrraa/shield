@@ -29,7 +29,10 @@ const PASSWORD_ENV = "SHIELD_DEMO_PASSWORD";
 
 process.env.SIMULATOR_BASE_URL = SIM_URL;
 process.env.SHIELD_DATA_DIR = DATA_DIR;
-process.env.SHIELD_JWT_SECRET ??= "shield-e2e-demo-secret";
+// JWT_SECRET is the variable the runtime actually reads (requireJwtSecret);
+// the old SHIELD_JWT_SECRET fallback was dead config and left the script
+// crashing with AuthConfigError on any environment lacking JWT_SECRET.
+process.env.JWT_SECRET ??= "shield-e2e-demo-secret";
 
 interface Json {
     [key: string]: any;
