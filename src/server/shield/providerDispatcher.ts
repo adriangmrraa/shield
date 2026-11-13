@@ -55,6 +55,7 @@ export class ProviderDispatcher {
     private readonly now: () => Date;
     private timer: ReturnType<typeof setTimeout> | null = null;
     private running = false;
+    private inCycle = false;
     /** Orders already audited for a non-terminal hold — avoids audit spam per cycle. */
     private readonly holdAudited = new Set<string>();
 
@@ -78,6 +79,18 @@ export class ProviderDispatcher {
      * fans them out in parallel across providers, bounded inside each one.
      */
     async cycleOnce(): Promise<void> {
+        // Reentrancy guard: the loop awaits each cycle, but cycleOnce is public
+        // and an overlapping run would re-POST orders currently mid-dispatch.
+        if (this.inCycle) return;
+        this.inCycle = true;
+        try {
+            await this.runCycle();
+        } finally {
+            this.inCycle = false;
+        }
+    }
+
+    private async runCycle(): Promise<void> {
         const estado = await this.client.estado();
         const providers = new Map((await this.client.proveedores()).map((p) => [p.id, p]));
         const nowMs = this.now().getTime();
@@ -197,6 +210,14 @@ export class ProviderDispatcher {
                     // Duplicate means the provider already accepted this orden_id:
                     // adopt its truth instead of inventing a rejection.
                     await this.adoptRemote(order, minuto);
+                    return;
+                }
+                if (error.status >= 500) {
+                    // 5xx is ambiguous: the provider may have recorded the order
+                    // upstream of its gateway. Marking it final would abandon a
+                    // possibly-live remote order and forbid any resend — leave
+                    // `enviada` so the tracker reconciles against provider truth.
+                    this.onError(error);
                     return;
                 }
                 const motivo = httpMotivo(error) ?? `http_${error.status}`;

@@ -5,6 +5,7 @@ import { ProviderDispatcher } from "../providerDispatcher.js";
 import { TEST_TURNOS } from "./judicialHarness.js";
 import { memPersistence } from "./memPersistence.js";
 import { FakeDispatchSim, FakeProviderBackend, makeOrder } from "./providerFake.js";
+import { SimulatorHttpError } from "../qualydataClient.js";
 
 // ProviderDispatcher over the servidor.py-mirror backend. Orders come from a
 // MemOrderRepository; the signing judge and shift table are the TEST_* fixtures.
@@ -134,6 +135,33 @@ describe("ProviderDispatcher", () => {
         nowMs = 6_000;
         await dispatcher.cycleOnce();
         expect(backend.posts).toHaveLength(1);
+    });
+
+    it("5xx del proveedor: queda enviada (ambiguo), nunca rechazada final", async () => {
+        const backend = new FakeProviderBackend();
+        const persistence = memPersistence();
+        const audit = new AuditService(persistence.audit);
+        const sim = new FakeDispatchSim(backend);
+        // El proveedor puede haber registrado la orden upstream del gateway que
+        // falló: un 500 definitivo abandonaría una orden posiblemente viva.
+        const failing500 = {
+            estado: () => sim.estado(),
+            proveedores: () => sim.proveedores(),
+            orden: (p: string, o: string) => sim.orden(p, o),
+            enviarOrden: async (p: string, o: Record<string, unknown>) => {
+                await backend.recibirOrden(p, o); // la orden SÍ llegó al backend
+                throw new SimulatorHttpError(500, { error: "upstream exploded" }, "HTTP 500");
+            },
+        };
+        const dispatcher = new ProviderDispatcher({ orders: persistence.orders, client: failing500, audit, turnos });
+        const orden = makeOrder();
+        await persistence.orders.save(orden);
+
+        await dispatcher.cycleOnce();
+        const saved = await persistence.orders.getById(orden.orden_id);
+        expect(saved?.estado).toBe("enviada"); // ambiguo — el tracker reconcilia
+        expect(saved?.final).toBeUndefined();
+        expect(backend.remoteOrden("aurora", orden.orden_id)?.estado).toBe("recibida");
     });
 
     it("4xx de contrato (firma inválida): rechazada_proveedor, sin retry ciego", async () => {

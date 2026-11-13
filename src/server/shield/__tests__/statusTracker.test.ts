@@ -229,7 +229,8 @@ describe("OrderStatusTracker — recuperación de enviada", () => {
         const backend = new FakeProviderBackend();
         const { persistence, tracker, dispatcher } = await rig(backend);
         // Crash simulado: la orden quedó marcada enviada pero el POST nunca llegó.
-        await persistence.orders.save(makeOrder({ estado: "enviada", enviada_min: 9 }));
+        // enviada_min 7 vs minuto 10 -> más vieja que la ventana de gracia (2).
+        await persistence.orders.save(makeOrder({ estado: "enviada", enviada_min: 7 }));
 
         await tracker.cycleOnce();
         let saved = (await persistence.orders.list())[0];
@@ -242,6 +243,22 @@ describe("OrderStatusTracker — recuperación de enviada", () => {
         saved = (await persistence.orders.list())[0];
         expect(saved.estado).toBe("recibida");
         expect(backend.remoteOrden("aurora", saved.orden_id)?.estado).toBe("recibida");
+    });
+
+    it("enviada dentro de la ventana de gracia NO se reencola (POST posiblemente en vuelo)", async () => {
+        const backend = new FakeProviderBackend();
+        const { persistence, tracker, dispatcher } = await rig(backend);
+        // enviada_min 9 vs minuto 10 -> dentro de la gracia: el POST puede seguir
+        // en vuelo; reencolarla duplicaría el POST (y el 409 tendría que rescatar).
+        await persistence.orders.save(makeOrder({ estado: "enviada", enviada_min: 9 }));
+
+        await tracker.cycleOnce();
+        const saved = (await persistence.orders.list())[0];
+        expect(saved.estado).toBe("enviada");
+        expect(persistence.audit.byEvent("orden_estado_recuperado")).toHaveLength(0);
+        // Y el dispatcher no re-POSTeó nada.
+        expect(backend.postsDe("aurora")).toHaveLength(0);
+        void dispatcher;
     });
 });
 
@@ -507,5 +524,108 @@ describe("OrderStatusTracker — idempotencia tras reinicio", () => {
             "ord-EXP-R-0001-fallax-01",
             "ord-EXP-R-0001-fallax-02",
         ]);
+    });
+});
+
+describe("OrderStatusTracker — resiliencia del batch y contexto de partido", () => {
+    it("fallo del listado por lote: cae al polling por orden sin perder el ciclo", async () => {
+        const backend = new FakeProviderBackend();
+        const { persistence, dispatcher } = await rig(backend);
+        const sim = new FakeDispatchSim(backend);
+        const audit = new AuditService(persistence.audit);
+        const { filePath } = await writeTestJuzgados();
+        const signing = await SigningService.fromEnv(filePath);
+        const caseService = new CaseService({ cases: persistence.cases, evidence: persistence.evidence, audit });
+        // Una fila inválida o un 500 en /ordenes no puede congelar todas las órdenes
+        // del proveedor: el ciclo cae al path por-orden (aislamiento previo).
+        const failing = {
+            estado: () => sim.estado(),
+            orden: (p: string, o: string) => sim.orden(p, o),
+            ordenes: async () => {
+                throw new Error("list payload inválido");
+            },
+        };
+        const tracker = new OrderStatusTracker({
+            orders: persistence.orders,
+            cases: persistence.cases,
+            caseService,
+            client: failing,
+            signing,
+            audit,
+            turnos,
+            retryDelayMs: 10,
+        });
+
+        await persistence.orders.save(makeOrder({ orden_id: "ord-EXP-FB-0001-aurora-01", expediente_id: "EXP-FB-0001" }));
+        await dispatcher.cycleOnce();
+        backend.avanzar(11);
+
+        await tracker.cycleOnce();
+        expect((await persistence.orders.list())[0].estado).toBe("aplicada");
+    });
+
+    it("reintento con partido distinto al del expediente: se bloquea, jamás se firma", async () => {
+        const backend = new FakeProviderBackend();
+        const { persistence, tracker } = await rig(backend);
+        // El expediente nació en "demo"; el simulador reporta "test-match".
+        // Firmar el retry con el fin_min del nuevo partido emitiría una orden
+        // legalmente inválida — la ranura se cierra pidiendo contexto nuevo.
+        const exp = aprobado("EXP-PM-0001"); // partido_id "demo" != estado.partido "test-match"
+        await persistence.cases.save(exp);
+        await persistence.orders.save(
+            makeOrder({
+                orden_id: "ord-EXP-PM-0001-aurora-01",
+                expediente_id: "EXP-PM-0001",
+                estado: "fallida",
+                intento: 1,
+                finalizada_min: 10,
+            }),
+        );
+
+        await tracker.cycleOnce();
+        const orders = await persistence.orders.list();
+        expect(orders).toHaveLength(1); // ningún retry firmado
+        expect(orders[0].final).toBe(true);
+        const bloqueos = persistence.audit.byEvent("orden_reintento_bloqueado");
+        expect(bloqueos).toHaveLength(1);
+        expect(bloqueos[0].datos.motivo).toBe("partido_distinto_del_expediente");
+    });
+});
+
+describe("OrderStatusTracker — anomalías de expediente auditables", () => {
+    it("aprobado sin sus órdenes (crash mid-approval): se audita una sola vez", async () => {
+        const backend = new FakeProviderBackend();
+        const { persistence, tracker } = await rig(backend);
+        await persistence.cases.save(aprobado("EXP-AO-0001")); // 1 medida, 0 órdenes
+
+        await tracker.cycleOnce();
+        await tracker.cycleOnce(); // segunda vuelta: no duplica el evento
+        const eventos = persistence.audit.byEvent("expediente_ordenes_incompletas");
+        expect(eventos).toHaveLength(1);
+        expect(eventos[0].datos.ordenes_presentes).toBe(0);
+        expect(eventos[0].datos.medidas_esperadas).toBe(1);
+    });
+
+    it("todas las medidas en fallo terminal: se audita el hueco de terminalidad", async () => {
+        const backend = new FakeProviderBackend();
+        const { persistence, tracker } = await rig(backend);
+        await persistence.cases.save(aprobado("EXP-AT-0001"));
+        await persistence.orders.save(
+            makeOrder({
+                orden_id: "ord-EXP-AT-0001-aurora-01",
+                expediente_id: "EXP-AT-0001",
+                estado: "rechazada_proveedor",
+                final: true,
+                motivo: "tipo_no_soportado:ip",
+            }),
+        );
+
+        await tracker.cycleOnce();
+        const eventos = persistence.audit.byEvent("expediente_sin_borde_terminal");
+        expect(eventos).toHaveLength(1);
+        expect(eventos[0].datos.motivo).toBe("todos_los_slots_en_fallo_terminal");
+        // El expediente queda abierto — no hay borde honesto en el grafo; el
+        // evento lo hace visible hasta que exista una decisión de dominio.
+        expect((await persistence.cases.getById("EXP-AT-0001"))!.estado).toBe("aprobado");
     });
 });

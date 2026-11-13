@@ -41,6 +41,14 @@ export interface TrackerSimApi {
 export const DEFAULT_MAX_INTENTOS = 4;
 export const DEFAULT_RETRY_DELAY_MS = 2_500;
 export const DEFAULT_GRACE_MIN = 5;
+/**
+ * Sim-minutes an `enviada` order may be absent from the provider before the
+ * tracker requeues it. The dispatcher saves enviada BEFORE the POST lands, so
+ * an in-flight POST legitimately looks "missing remotely" — requeueing inside
+ * this window duplicates the POST (the provider may then 409 it, but the
+ * duplicate network call and stale-write regression already happened).
+ */
+export const DEFAULT_ENVIADA_REQUEUE_GRACE_MIN = 2;
 
 /** Slot identity: one block target at one provider inside one expediente. */
 function slotKey(order: Pick<ShieldOrder, "expediente_id" | "proveedor_id" | "objetivo">): string {
@@ -67,6 +75,8 @@ export interface OrderStatusTrackerDeps {
     retryDelayMs?: number;
     /** Grace window after fin_min for the zero-ip-active check (TEST 12). */
     graceMin?: number;
+    /** Sim-minutes an enviada order may be remote-missing before requeue. */
+    enviadaRequeueGraceMin?: number;
     intervalMs?: number;
     onError?: (error: unknown) => void;
     now?: () => Date;
@@ -89,12 +99,16 @@ export class OrderStatusTracker {
     private readonly maxIntentos: number;
     private readonly retryDelayMs: number;
     private readonly graceMin: number;
+    private readonly enviadaRequeueGraceMin: number;
     private readonly intervalMs: number;
     private readonly onError: (error: unknown) => void;
     private readonly now: () => Date;
     private timer: ReturnType<typeof setTimeout> | null = null;
     private running = false;
+    private inCycle = false;
     private graceChecked = false;
+    /** Expedientes already audited for an order-composition anomaly. */
+    private readonly anomalyAudited = new Set<string>();
     private graceResult: GraceReport = { verificado: false, minuto: null, ipActivas: [] };
 
     constructor(deps: OrderStatusTrackerDeps) {
@@ -108,6 +122,7 @@ export class OrderStatusTracker {
         this.maxIntentos = deps.maxIntentos ?? DEFAULT_MAX_INTENTOS;
         this.retryDelayMs = deps.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
         this.graceMin = deps.graceMin ?? DEFAULT_GRACE_MIN;
+        this.enviadaRequeueGraceMin = deps.enviadaRequeueGraceMin ?? DEFAULT_ENVIADA_REQUEUE_GRACE_MIN;
         this.intervalMs = deps.intervalMs ?? 800;
         this.onError = deps.onError ?? ((error) => console.error("[statusTracker] cycle failed:", error));
         this.now = deps.now ?? (() => new Date());
@@ -127,6 +142,19 @@ export class OrderStatusTracker {
      * slots, fold the aggregate into each open expediente, run the grace check.
      */
     async cycleOnce(): Promise<void> {
+        // Reentrancy guard: the loop awaits each cycle, but cycleOnce is public
+        // (scripts/tests call it directly) and overlapping cycles could double-
+        // process the same orders (e.g. two retries spawned for one slot).
+        if (this.inCycle) return;
+        this.inCycle = true;
+        try {
+            await this.runCycle();
+        } finally {
+            this.inCycle = false;
+        }
+    }
+
+    private async runCycle(): Promise<void> {
         const estado = await this.client.estado();
         const minuto = estado.minuto_actual;
 
@@ -149,6 +177,17 @@ export class OrderStatusTracker {
                         remoteList = await this.client.ordenes!(proveedorId);
                     } catch (error) {
                         this.onError(error);
+                        // Batch failed (outage OR one schema-invalid row in the
+                        // list, which rejects the whole array): fall back to the
+                        // per-order path so a single bad row cannot stall every
+                        // order at this provider.
+                        for (const order of orders) {
+                            try {
+                                await this.pollOrder(order, minuto);
+                            } catch (pollError) {
+                                this.onError(pollError);
+                            }
+                        }
                         return;
                     }
                     const byId = new Map(remoteList.map((o) => [o.orden_id, o]));
@@ -209,8 +248,13 @@ export class OrderStatusTracker {
     private async pollOrderFromView(order: ShieldOrder, remote: ProviderOrder | null, minuto: number): Promise<void> {
         if (remote === null) {
             if (order.estado === "enviada") {
-                // Marked enviada but the provider never got it (crash window):
-                // safely back to pendiente_envio for the dispatcher.
+                // The dispatcher persists enviada BEFORE the POST completes, so
+                // remote absence inside the grace window is the normal in-flight
+                // case — requeueing it now duplicates the POST. Only an enviada
+                // older than the grace (crash window) goes back to pending.
+                if (order.enviada_min !== undefined && minuto - order.enviada_min < this.enviadaRequeueGraceMin) {
+                    return;
+                }
                 order.estado = "pendiente_envio";
                 await this.orders.save(order);
                 await this.safeAudit({
@@ -321,6 +365,16 @@ export class OrderStatusTracker {
         if (!juecesDeTurno(minuto, this.turnos()).includes(failed.juez_id)) {
             return bloquear("juez_fuera_de_turno_requiere_reaprobacion", { juez_id: failed.juez_id });
         }
+        // A retry is signed with the CURRENT match's clock and fin_min. If the
+        // simulator moved to a different partido, signing the old case's target
+        // under the new match's expiry would emit a legally wrong order.
+        const expediente = await this.cases.getById(failed.expediente_id);
+        if (expediente && expediente.partido_id !== estado.partido) {
+            return bloquear("partido_distinto_del_expediente", {
+                partido_expediente: expediente.partido_id,
+                partido_actual: estado.partido,
+            });
+        }
 
         const retryId = `ord-${failed.expediente_id}-${failed.proveedor_id}-${String(intento + 1).padStart(2, "0")}`;
         const venceMin = Math.floor(estado.fin_min);
@@ -373,7 +427,43 @@ export class OrderStatusTracker {
         for (const expediente of abiertos) {
             try {
                 const ordenes = await this.orders.listByExpediente(expediente.expediente_id);
+                // Approval persists the case transition BEFORE composing orders,
+                // so a crash mid-approval can leave an open expediente with zero
+                // or a subset of its signed orders — undetectable downstream
+                // otherwise (aggregateTarget returns null and it hangs open).
+                const esperadas = expediente.medidas_por_isp.filter((m) => m.tipo !== null && m.objetivo !== null).length;
+                if (ordenes.length < esperadas && this.auditAnomalyOnce(`${expediente.expediente_id}:incompletas`)) {
+                    await this.safeAudit({
+                        evento: "expediente_ordenes_incompletas",
+                        minSim: minuto,
+                        expedienteId: expediente.expediente_id,
+                        correlationId: `anomalia:${expediente.expediente_id}:ordenes`,
+                        datos: {
+                            expediente_id: expediente.expediente_id,
+                            estado: expediente.estado,
+                            ordenes_presentes: ordenes.length,
+                            medidas_esperadas: esperadas,
+                        },
+                    });
+                }
                 const target = aggregateTarget(expediente.estado, ordenes);
+                // The case graph has no terminal edge for "every measure failed
+                // definitively" — such a case hangs open forever. Flag it once
+                // instead of letting it sit invisible.
+                if (target === null && ordenes.length > 0 && this.auditAnomalyOnce(`${expediente.expediente_id}:sin-terminal`)) {
+                    await this.safeAudit({
+                        evento: "expediente_sin_borde_terminal",
+                        minSim: minuto,
+                        expedienteId: expediente.expediente_id,
+                        correlationId: `anomalia:${expediente.expediente_id}:terminal`,
+                        datos: {
+                            expediente_id: expediente.expediente_id,
+                            estado: expediente.estado,
+                            ordenes: ordenes.length,
+                            motivo: "todos_los_slots_en_fallo_terminal",
+                        },
+                    });
+                }
                 if (target === null || target === expediente.estado) continue;
                 // The custody graph only allows one hop per transition. When
                 // orders advanced faster than these cycles (e.g. after a
@@ -412,6 +502,13 @@ export class OrderStatusTracker {
 
     private async safeAudit(entry: Parameters<AuditService["append"]>[0]): Promise<void> {
         await this.audit.append(entry).catch(() => {});
+    }
+
+    /** True once per key — keeps anomaly audits from spamming every cycle. */
+    private auditAnomalyOnce(key: string): boolean {
+        if (this.anomalyAudited.has(key)) return false;
+        this.anomalyAudited.add(key);
+        return true;
     }
 
     start(): void {

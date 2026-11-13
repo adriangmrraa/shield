@@ -33,6 +33,8 @@ export const AUDIT_EVENTOS = [
     "orden_levantada",
     "orden_estado_recuperado",
     "ip_activa_post_gracia",
+    "expediente_ordenes_incompletas",
+    "expediente_sin_borde_terminal",
 ] as const;
 export type AuditEventName = (typeof AUDIT_EVENTOS)[number];
 
