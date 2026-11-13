@@ -14,6 +14,7 @@ import {
   Mic,
   ClipboardCheck,
   Film,
+  Scale,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -29,6 +30,7 @@ const NAV_MAIN = [
 ];
 
 const NAV_BOTTOM = [
+  { to: '/shield', icon: Scale, label: 'Shield (demo)' },
   { to: '/settings', icon: Settings, label: 'Configuracion' },
   { to: '/billing', icon: CreditCard, label: 'Billing' },
 ];
