@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { PipelineProvider } from './hooks/usePipelineState';
 import { AuthProvider } from './contexts/AuthContext';
 import { PrivateRoute } from './components/PrivateRoute';
@@ -18,6 +18,13 @@ import { ProgramsPage } from './pages/ProgramsPage';
 import { ReviewPage } from './pages/ReviewPage';
 import { ClipsPage } from './pages/ClipsPage';
 import PipelineEditor from './editor/PipelineEditor';
+import { ShieldProvider } from './pages/shield/ShieldContext';
+import { ShieldLayout } from './pages/shield/ShieldLayout';
+import { ShieldLoginPage } from './pages/shield/ShieldLoginPage';
+import { ShieldTrayPage } from './pages/shield/ShieldTrayPage';
+import { ShieldCaseDetailPage } from './pages/shield/ShieldCaseDetailPage';
+import { ShieldMonitorPage } from './pages/shield/ShieldMonitorPage';
+import { ShieldMetricsPage } from './pages/shield/ShieldMetricsPage';
 import './index.css';
 import './App.css';
 
@@ -31,6 +38,24 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
+
+            {/* Shield judicial console — own JWT session, outside the app's auth guard */}
+            <Route
+              path="/shield"
+              element={
+                <ShieldProvider>
+                  <Outlet />
+                </ShieldProvider>
+              }
+            >
+              <Route path="login" element={<ShieldLoginPage />} />
+              <Route element={<ShieldLayout />}>
+                <Route index element={<ShieldTrayPage />} />
+                <Route path="cases/:id" element={<ShieldCaseDetailPage />} />
+                <Route path="monitor" element={<ShieldMonitorPage />} />
+                <Route path="metrics" element={<ShieldMetricsPage />} />
+              </Route>
+            </Route>
 
             {/* Protected routes with layout */}
             <Route
