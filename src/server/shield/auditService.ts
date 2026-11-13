@@ -20,6 +20,19 @@ export const AUDIT_EVENTOS = [
     "expediente_rechazado",
     "orden_compuesta",
     "firma_bloqueada_fuera_de_turno",
+    "orden_despachada",
+    "orden_recibida",
+    "orden_rechazada_proveedor",
+    "orden_aplicada",
+    "orden_fallida",
+    "orden_reintentada",
+    "orden_reintento_bloqueado",
+    "orden_bloqueada_turno",
+    "orden_no_despachada",
+    "orden_vencida",
+    "orden_levantada",
+    "orden_estado_recuperado",
+    "ip_activa_post_gracia",
 ] as const;
 export type AuditEventName = (typeof AUDIT_EVENTOS)[number];
 

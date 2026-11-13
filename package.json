@@ -17,6 +17,7 @@
     "shield:seed": "tsx scripts/shield-seed-users.ts",
     "shield:dev": "tsx src/server/shield/devServer.ts",
     "shield:judge-flow": "tsx scripts/shield-judge-flow.ts",
+    "shield:e2e": "tsx scripts/shield-e2e.ts",
     "db:generate": "npx drizzle-kit generate",
     "db:migrate": "npx drizzle-kit migrate",
     "db:push": "npx drizzle-kit push",

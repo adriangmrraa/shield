@@ -5,6 +5,7 @@ import { CaseNotFoundError, CaseService } from "./caseService.js";
 import { ESTADOS_EXPEDIENTE, InvalidTransitionError, type EstadoExpediente } from "./expedienteTypes.js";
 import { loginBodySchema, rejectBodySchema, type JudicialIdentity } from "./judicialTypes.js";
 import type { MatchOrchestrator } from "./matchOrchestrator.js";
+import { computeMetrics } from "./metricsService.js";
 import {
     CaseNotPendingError,
     MatchFinishedError,
@@ -13,10 +14,12 @@ import {
     SimulatorUnavailableError,
 } from "./orderService.js";
 import type { ShieldPersistence } from "./persistence/types.js";
+import type { ProviderDispatcher } from "./providerDispatcher.js";
 import { SimulatorHttpError, SimulatorNetworkError } from "./qualydataClient.js";
 import { requireJudge, ShieldAuthService } from "./shieldAuth.js";
 import { OutOfShiftError, ShiftGuard } from "./shiftGuard.js";
 import { SigningConfigError, UnknownJudgeError } from "./signingService.js";
+import type { OrderStatusTracker } from "./statusTracker.js";
 import type { CourtInfo, DetectionsPage, Provider, SimulatorState } from "./types.js";
 
 // Own API (spec §12): /api/shield/*. POST /auth/login is the only public route;
@@ -41,6 +44,8 @@ export interface ShieldRouterDeps {
     orderService: OrderService;
     caseService: CaseService;
     orchestrator?: MatchOrchestrator | null;
+    /** S5 background loops; /run/start|stop drives them together with the poller. */
+    dispatch?: { dispatcher: ProviderDispatcher; tracker: OrderStatusTracker } | null;
 }
 
 type AsyncHandler = (req: Request, res: Response, next: NextFunction) => Promise<void>;
@@ -261,10 +266,19 @@ export function createShieldRouter(deps: ShieldRouterDeps): Router {
             for (const entry of auditEntries) {
                 porEvento[entry.evento] = (porEvento[entry.evento] ?? 0) + 1;
             }
+            let isp = null;
+            if (sim) {
+                isp = computeMetrics({
+                    orders: await persistence.orders.list(),
+                    expedientes: await persistence.cases.list(),
+                    providers: await sim.proveedores(),
+                });
+            }
             res.json({
                 ...(await counters(persistence)),
                 audit_eventos: porEvento,
                 orchestrator: deps.orchestrator ? await deps.orchestrator.status() : null,
+                isp,
             });
         }),
     );
@@ -275,6 +289,8 @@ export function createShieldRouter(deps: ShieldRouterDeps): Router {
             return;
         }
         deps.orchestrator.start();
+        deps.dispatch?.dispatcher.start();
+        deps.dispatch?.tracker.start();
         res.json({ running: true });
     });
 
@@ -284,6 +300,8 @@ export function createShieldRouter(deps: ShieldRouterDeps): Router {
             return;
         }
         deps.orchestrator.stop();
+        deps.dispatch?.dispatcher.stop();
+        deps.dispatch?.tracker.stop();
         res.json({ running: false });
     });
 
