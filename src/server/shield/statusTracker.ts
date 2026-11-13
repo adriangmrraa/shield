@@ -28,6 +28,14 @@ import type { ProviderOrder, SimulatorState } from "./types.js";
 export interface TrackerSimApi {
     estado(): Promise<SimulatorState>;
     orden(proveedorId: string, ordenId: string): Promise<ProviderOrder>;
+    /**
+     * Optional per-provider batch listing (GET /proveedores/<id>/ordenes).
+     * When present the tracker fetches ONE list per provider per cycle instead
+     * of one request per live order — the resource-constrained simulator drops
+     * connections under the per-order burst (observed ECONNREFUSED floods in
+     * e2e), so the batch path materially reduces the failure surface.
+     */
+    ordenes?(proveedorId: string): Promise<ProviderOrder[]>;
 }
 
 export const DEFAULT_MAX_INTENTOS = 4;
@@ -125,7 +133,37 @@ export class OrderStatusTracker {
         // 1) Provider truth for every non-terminal sent order.
         const all = await this.orders.list();
         const vivas = all.filter((o) => o.estado === "enviada" || o.estado === "recibida" || o.estado === "aplicada");
-        await Promise.all(vivas.map((order) => this.pollOrder(order, minuto).catch((e) => this.onError(e))));
+        if (this.client.ordenes) {
+            // Batch path: one request per provider, orders matched by orden_id.
+            // A missing orden_id in the list is the 404 equivalent.
+            const byProvider = new Map<string, ShieldOrder[]>();
+            for (const order of vivas) {
+                const list = byProvider.get(order.proveedor_id) ?? [];
+                list.push(order);
+                byProvider.set(order.proveedor_id, list);
+            }
+            await Promise.all(
+                [...byProvider].map(async ([proveedorId, orders]) => {
+                    let remoteList: ProviderOrder[];
+                    try {
+                        remoteList = await this.client.ordenes!(proveedorId);
+                    } catch (error) {
+                        this.onError(error);
+                        return;
+                    }
+                    const byId = new Map(remoteList.map((o) => [o.orden_id, o]));
+                    for (const order of orders) {
+                        try {
+                            await this.pollOrderFromView(order, byId.get(order.orden_id) ?? null, minuto);
+                        } catch (error) {
+                            this.onError(error);
+                        }
+                    }
+                }),
+            );
+        } else {
+            await Promise.all(vivas.map((order) => this.pollOrder(order, minuto).catch((e) => this.onError(e))));
+        }
 
         // 2) Slots whose latest attempt is fallida (not final) -> retry or close.
         const bySlot = groupBySlot(await this.orders.list());
@@ -151,30 +189,30 @@ export class OrderStatusTracker {
     // --- provider polling -------------------------------------------------
 
     private async pollOrder(order: ShieldOrder, minuto: number): Promise<void> {
-        let remote: ProviderOrder;
+        let remote: ProviderOrder | null;
         try {
             remote = await this.client.orden(order.proveedor_id, order.orden_id);
         } catch (error) {
             if (error instanceof SimulatorHttpError && error.status === 404) {
-                if (order.estado === "enviada") {
-                    // Marked enviada but the provider never got it (crash window):
-                    // safely back to pendiente_envio for the dispatcher.
-                    order.estado = "pendiente_envio";
-                    await this.orders.save(order);
-                    await this.safeAudit({
-                        evento: "orden_estado_recuperado",
-                        minSim: minuto,
-                        expedienteId: order.expediente_id,
-                        correlationId: `orden:${order.orden_id}`,
-                        datos: {
-                            orden_id: order.orden_id,
-                            proveedor_id: order.proveedor_id,
-                            motivo: "enviada_sin_registro_remoto_reencolada",
-                        },
-                    });
-                    return;
-                }
-                // A provider-confirmed order vanished: anomaly, keep local truth.
+                remote = null;
+            } else {
+                throw error;
+            }
+        }
+        await this.pollOrderFromView(order, remote, minuto);
+    }
+
+    /**
+     * Fold one provider view into the local order. `remote === null` is the
+     * 404 equivalent (per-order 404 or absent from the provider's order list).
+     */
+    private async pollOrderFromView(order: ShieldOrder, remote: ProviderOrder | null, minuto: number): Promise<void> {
+        if (remote === null) {
+            if (order.estado === "enviada") {
+                // Marked enviada but the provider never got it (crash window):
+                // safely back to pendiente_envio for the dispatcher.
+                order.estado = "pendiente_envio";
+                await this.orders.save(order);
                 await this.safeAudit({
                     evento: "orden_estado_recuperado",
                     minSim: minuto,
@@ -183,13 +221,25 @@ export class OrderStatusTracker {
                     datos: {
                         orden_id: order.orden_id,
                         proveedor_id: order.proveedor_id,
-                        motivo: "remota_no_encontrada",
-                        estado_local: order.estado,
+                        motivo: "enviada_sin_registro_remoto_reencolada",
                     },
                 });
                 return;
             }
-            throw error;
+            // A provider-confirmed order vanished: anomaly, keep local truth.
+            await this.safeAudit({
+                evento: "orden_estado_recuperado",
+                minSim: minuto,
+                expedienteId: order.expediente_id,
+                correlationId: `orden:${order.orden_id}`,
+                datos: {
+                    orden_id: order.orden_id,
+                    proveedor_id: order.proveedor_id,
+                    motivo: "remota_no_encontrada",
+                    estado_local: order.estado,
+                },
+            });
+            return;
         }
 
         const prev = order.estado;

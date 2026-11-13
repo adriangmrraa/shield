@@ -378,6 +378,91 @@ describe("OrderStatusTracker — agregado de expediente", () => {
     });
 });
 
+describe("OrderStatusTracker — polling por lote y fallback por orden", () => {
+    /** Sim without the batch ordenes endpoint — forces the per-order path. */
+    class NoBatchSim {
+        constructor(private inner: FakeDispatchSim) {}
+        estado() {
+            return this.inner.estado();
+        }
+        orden(proveedorId: string, ordenId: string) {
+            return this.inner.orden(proveedorId, ordenId);
+        }
+    }
+
+    it("batch: una consulta por proveedor reconcilia varias órdenes del mismo ISP", async () => {
+        const backend = new FakeProviderBackend();
+        const persistence = memPersistence();
+        const audit = new AuditService(persistence.audit);
+        const { filePath } = await writeTestJuzgados();
+        const signing = await SigningService.fromEnv(filePath);
+        const caseService = new CaseService({ cases: persistence.cases, evidence: persistence.evidence, audit });
+        const sim = new FakeDispatchSim(backend);
+        let listCalls = 0;
+        const counting = {
+            estado: () => sim.estado(),
+            orden: (p: string, o: string) => sim.orden(p, o),
+            ordenes: async (p: string) => {
+                listCalls += 1;
+                return sim.ordenes(p);
+            },
+        };
+        const tracker = new OrderStatusTracker({
+            orders: persistence.orders,
+            cases: persistence.cases,
+            caseService,
+            client: counting,
+            signing,
+            audit,
+            turnos,
+            retryDelayMs: 10,
+        });
+        const dispatcher = new ProviderDispatcher({ orders: persistence.orders, client: sim, audit, turnos });
+
+        await persistence.orders.save(makeOrder({ orden_id: "ord-EXP-BT-0001-aurora-01", expediente_id: "EXP-BT-0001", objetivo: "203.0.113.10", tipo: "ip" }));
+        await persistence.orders.save(makeOrder({ orden_id: "ord-EXP-BT-0002-aurora-01", expediente_id: "EXP-BT-0002", objetivo: "203.0.113.11", tipo: "ip" }));
+        await dispatcher.cycleOnce();
+        backend.avanzar(11);
+
+        await tracker.cycleOnce();
+        expect(listCalls).toBe(1); // 2 orders, 1 provider list request
+        const saved = await persistence.orders.list();
+        expect(saved.every((o) => o.estado === "aplicada")).toBe(true);
+    });
+
+    it("fallback sin endpoint de lote: reconcilia por orden individual", async () => {
+        const backend = new FakeProviderBackend();
+        const persistence = memPersistence();
+        const audit = new AuditService(persistence.audit);
+        const { filePath } = await writeTestJuzgados();
+        const signing = await SigningService.fromEnv(filePath);
+        const caseService = new CaseService({ cases: persistence.cases, evidence: persistence.evidence, audit });
+        const sim = new FakeDispatchSim(backend);
+        const tracker = new OrderStatusTracker({
+            orders: persistence.orders,
+            cases: persistence.cases,
+            caseService,
+            client: new NoBatchSim(sim),
+            signing,
+            audit,
+            turnos,
+            retryDelayMs: 10,
+        });
+        const dispatcher = new ProviderDispatcher({ orders: persistence.orders, client: sim, audit, turnos });
+
+        await persistence.orders.save(makeOrder({ orden_id: "ord-EXP-NB-0001-aurora-01", expediente_id: "EXP-NB-0001", objetivo: "203.0.113.10", tipo: "ip" }));
+        await dispatcher.cycleOnce();
+        backend.avanzar(11);
+        await tracker.cycleOnce();
+        expect((await persistence.orders.list())[0].estado).toBe("aplicada");
+
+        // enviada sin registro remoto -> reencolada también por el fallback.
+        await persistence.orders.save(makeOrder({ orden_id: "ord-EXP-NB-0002-aurora-01", expediente_id: "EXP-NB-0002", estado: "enviada", enviada_min: 9 }));
+        await tracker.cycleOnce();
+        expect((await persistence.orders.getById("ord-EXP-NB-0002-aurora-01"))!.estado).toBe("pendiente_envio");
+    });
+});
+
 describe("OrderStatusTracker — idempotencia tras reinicio", () => {
     it("reanuda polling de órdenes vivas y no duplica reintentos", async () => {
         const backend = new FakeProviderBackend([FAILA_PROVIDER]);
