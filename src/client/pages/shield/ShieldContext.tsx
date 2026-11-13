@@ -37,7 +37,7 @@ export function ShieldProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<ShieldStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [turnos, setTurnos] = useState<Turno[]>([]);
-  const { socket, connected } = useShieldSocket();
+  const { socket, connected } = useShieldSocket(juez?.juez_id ?? null);
 
   const isAuthenticated = hasToken && juez !== null;
 

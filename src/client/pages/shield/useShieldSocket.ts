@@ -6,15 +6,21 @@ import { getShieldToken } from './shieldApi';
 // /shield/socket.io path (proxied to the dev server by Vite) with the judicial
 // JWT in handshake.auth.token. When the socket drops, consumers fall back to a
 // ~5s poll — the UI degrades, it never freezes.
+//
+// The socket lifecycle follows the signed-in judge (`juezId`): a fresh login
+// creates a new JWT-authenticated socket; logout or a judge switch tears the
+// previous one down so it cannot keep emitting under a dead session. The
+// original []-deps effect only ever connected on a full page reload — a fresh
+// login left `socket` null and every view silently stayed on polling.
 
 const POLL_FALLBACK_MS = 5_000;
 
-export function useShieldSocket(): { socket: Socket | null; connected: boolean } {
+export function useShieldSocket(juezId: string | null): { socket: Socket | null; connected: boolean } {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
-    const token = getShieldToken();
+    const token = juezId ? getShieldToken() : null;
     if (!token) {
       setSocket(null);
       setConnected(false);
@@ -39,7 +45,7 @@ export function useShieldSocket(): { socket: Socket | null; connected: boolean }
       setSocket(null);
       setConnected(false);
     };
-  }, []);
+  }, [juezId]);
 
   return { socket, connected };
 }
