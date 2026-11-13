@@ -7,16 +7,24 @@ import { MatchOrchestrator } from "./matchOrchestrator.js";
 import { OrderService, type SimulatorClock } from "./orderService.js";
 import { DEFAULT_SHIELD_DATA_DIR, openJsonPersistence } from "./persistence/index.js";
 import type { ShieldPersistence } from "./persistence/types.js";
+import { ProviderDispatcher } from "./providerDispatcher.js";
 import { QualyDataClient } from "./qualydataClient.js";
 import { requireJwtSecret, ShieldAuthService } from "./shieldAuth.js";
 import { createShieldRouter, type ShieldSimApi } from "./shieldRoutes.js";
 import { ShiftGuard } from "./shiftGuard.js";
 import { SigningService } from "./signingService.js";
+import { OrderStatusTracker } from "./statusTracker.js";
 
 // Standalone Shield dev server (S4): the judicial API runs WITHOUT the
 // editorial base app — smaller surface, faster boot. It starts even when the
 // simulator is unreachable: read endpoints degrade with a clear message and
 // signing stays fail-closed (no clock, no shift proof, no signature).
+
+/** S5 background services: ISP fan-out + provider-state tracking. */
+export interface DispatchRuntime {
+    dispatcher: ProviderDispatcher;
+    tracker: OrderStatusTracker;
+}
 
 export interface ShieldAppDeps {
     persistence: ShieldPersistence;
@@ -27,6 +35,7 @@ export interface ShieldAppDeps {
     signing: SigningService;
     jwtSecret: string;
     orchestrator?: MatchOrchestrator | null;
+    dispatch?: DispatchRuntime | null;
     now?: () => Date;
 }
 
@@ -73,6 +82,7 @@ export function createShieldApp(deps: ShieldAppDeps): Express {
             orderService,
             caseService,
             orchestrator: deps.orchestrator ?? null,
+            dispatch: deps.dispatch ?? null,
         }),
     );
     app.get("/api/shield-health", (_req, res) => {
@@ -91,15 +101,37 @@ export function createShieldApp(deps: ShieldAppDeps): Express {
 
 export interface DevServerOptions {
     dataDir?: string;
+    /** Pre-opened persistence (E2E seeds users on it first); default opens dataDir. */
+    persistence?: ShieldPersistence;
     /** Pre-built sim surface (tests inject fakes); default builds QualyDataClient from env. */
     sim?: ShieldSimApi | null;
     clock?: SimulatorClock;
     orchestrator?: MatchOrchestrator | null;
+    /** Explicit dispatch runtime; default builds one when sim is a QualyDataClient. */
+    dispatch?: DispatchRuntime | null;
+    dispatcherIntervalMs?: number;
+    trackerIntervalMs?: number;
+    retryDelayMs?: number;
 }
 
-/** Wires the production bundle from env: persistence + signing + optional sim. */
-export async function createDevServer(options: DevServerOptions = {}): Promise<Express> {
-    const persistence = await openJsonPersistence(options.dataDir ?? process.env.SHIELD_DATA_DIR ?? DEFAULT_SHIELD_DATA_DIR);
+/** Everything the runtime owns — the E2E driver needs these handles. */
+export interface ShieldRuntime {
+    app: Express;
+    persistence: ShieldPersistence;
+    sim: ShieldSimApi | null;
+    signing: SigningService;
+    orchestrator: MatchOrchestrator | null;
+    dispatch: DispatchRuntime | null;
+}
+
+/**
+ * Wires the production bundle from env: persistence + signing + sim +
+ * orchestrator (detections) + dispatch (orders). `run/start` drives the loops.
+ */
+export async function createShieldRuntime(options: DevServerOptions = {}): Promise<ShieldRuntime> {
+    const persistence =
+        options.persistence ??
+        (await openJsonPersistence(options.dataDir ?? process.env.SHIELD_DATA_DIR ?? DEFAULT_SHIELD_DATA_DIR));
     const signing = await SigningService.fromEnv();
     const jwtSecret = requireJwtSecret();
 
@@ -129,14 +161,51 @@ export async function createDevServer(options: DevServerOptions = {}): Promise<E
         orchestrator = new MatchOrchestrator({ client: sim, persistence, audit });
     }
 
-    return createShieldApp({
+    let dispatch = options.dispatch ?? null;
+    if (options.dispatch === undefined && sim instanceof QualyDataClient) {
+        const audit = new AuditService(persistence.audit);
+        const caseService = new CaseService({
+            cases: persistence.cases,
+            evidence: persistence.evidence,
+            audit,
+        });
+        dispatch = {
+            dispatcher: new ProviderDispatcher({
+                orders: persistence.orders,
+                client: sim,
+                audit,
+                turnos: () => signing.turnos(),
+                intervalMs: options.dispatcherIntervalMs,
+            }),
+            tracker: new OrderStatusTracker({
+                orders: persistence.orders,
+                cases: persistence.cases,
+                caseService,
+                client: sim,
+                signing,
+                audit,
+                turnos: () => signing.turnos(),
+                intervalMs: options.trackerIntervalMs,
+                retryDelayMs: options.retryDelayMs,
+            }),
+        };
+    }
+
+    const app = createShieldApp({
         persistence,
         sim,
         clock,
         signing,
         jwtSecret,
         orchestrator,
+        dispatch,
     });
+    return { app, persistence, sim, signing, orchestrator, dispatch };
+}
+
+/** Wires the production bundle from env: persistence + signing + optional sim. */
+export async function createDevServer(options: DevServerOptions = {}): Promise<Express> {
+    return (await createShieldRuntime(options)).app;
 }
 
 async function main(): Promise<void> {
