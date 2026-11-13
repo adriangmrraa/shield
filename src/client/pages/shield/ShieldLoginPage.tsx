@@ -59,25 +59,30 @@ export function ShieldLoginPage() {
             <p className="text-white/35 text-sm mb-5">Usuario y contraseña demo provistos por el seed</p>
 
             {error && (
-              <div className="mb-5 p-3.5 rounded-xl bg-red-500/8 border border-red-500/15 text-red-400 text-sm flex items-center gap-2 animate-scale-in">
-                <div className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />
+              <div
+                className="mb-5 p-3.5 rounded-xl bg-red-500/8 border border-red-500/15 text-red-400 text-sm flex items-center gap-2 animate-scale-in"
+                role="alert"
+              >
+                <div className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" aria-hidden />
                 {error}
               </div>
             )}
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="text-xs font-medium text-white/40 mb-2 block uppercase tracking-wider">
+                <label htmlFor="shield-username" className="text-xs font-medium text-white/40 mb-2 block uppercase tracking-wider">
                   Usuario judicial
                 </label>
                 <div className="relative group">
-                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20 group-focus-within:text-cyan-400 transition-colors" />
+                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20 group-focus-within:text-cyan-400 transition-colors" aria-hidden />
                   <input
+                    id="shield-username"
                     type="text"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     required
                     autoComplete="username"
+                    autoFocus
                     className="input-premium pl-11"
                     placeholder="jueza-laura-ficticia"
                   />
@@ -85,12 +90,13 @@ export function ShieldLoginPage() {
               </div>
 
               <div>
-                <label className="text-xs font-medium text-white/40 mb-2 block uppercase tracking-wider">
+                <label htmlFor="shield-password" className="text-xs font-medium text-white/40 mb-2 block uppercase tracking-wider">
                   Contraseña demo
                 </label>
                 <div className="relative group">
-                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20 group-focus-within:text-cyan-400 transition-colors" />
+                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20 group-focus-within:text-cyan-400 transition-colors" aria-hidden />
                   <input
+                    id="shield-password"
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}

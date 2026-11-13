@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Play, Square } from 'lucide-react';
+import { Activity, ClipboardList, FileText, Play, Radar, Square } from 'lucide-react';
 import { shieldApi } from './shieldApi';
 import { useShield } from './ShieldContext';
 import { useShieldLive } from './useShieldSocket';
 import { OrderStateBadge } from './components/badges';
-import { EmptyState, ErrorState, LoadingState, MinutoChip, ShieldCard } from './components/shared';
+import { EmptyState, ErrorState, MinutoChip, ShieldCard, SkeletonRows, StaleWarning, StatCard } from './components/shared';
 import type { AuditEntry, DetectionsResponse, ShieldOrder, ShieldStatus } from './shieldTypes';
 
 // VISTA 1 — Centro de operaciones (spec §13): live match clock, incoming
@@ -52,7 +52,15 @@ export function ShieldMonitorPage() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-white">Monitor en vivo</h1>
+          <h1 className="text-lg font-semibold text-white flex items-center gap-2">
+            Monitor en vivo
+            {running && (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">
+                <span className="size-1.5 rounded-full bg-current animate-pulse" aria-hidden />
+                Run activo
+              </span>
+            )}
+          </h1>
           <p className="text-xs text-white/35 mt-0.5">
             Detecciones, verificación y órdenes en tiempo real durante el partido simulado.
           </p>
@@ -62,9 +70,9 @@ export function ShieldMonitorPage() {
             <button
               onClick={() => void setRun(false)}
               disabled={runBusy}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium border border-red-500/30 text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium border border-red-500/30 text-red-300 hover:bg-red-500/10 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/50"
             >
-              <Square className="w-3.5 h-3.5" /> Frenar run
+              <Square className="w-3.5 h-3.5" aria-hidden /> Frenar run
             </button>
           ) : (
             <button
@@ -72,32 +80,38 @@ export function ShieldMonitorPage() {
               disabled={runBusy}
               className="btn-primary flex items-center gap-1.5 px-3.5 py-2 text-sm"
             >
-              <Play className="w-3.5 h-3.5" /> Iniciar run
+              <Play className="w-3.5 h-3.5" aria-hidden /> Iniciar run
             </button>
           )}
         </div>
       </div>
 
       {runError && <ErrorState>{runError}</ErrorState>}
-      {status.error && <ErrorState>{status.error}</ErrorState>}
+      {status.error && !status.data && <ErrorState>{status.error}</ErrorState>}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard label="Minuto de partido" value={reloj ? `${reloj.minuto_actual}` : '—'} hint={reloj ? `fin ${reloj.fin_min} · x${reloj.acelerar}` : 'simulador sin conexión'} accent={reloj?.finalizado ? 'text-zinc-300' : 'text-cyan-300'} />
-        <StatCard label="Detecciones vistas" value={contadores?.detecciones_vistas ?? '—'} hint="deduplicadas por el poller" />
-        <StatCard label="Expedientes" value={sumValues(contadores?.casos_por_estado)} hint={contadores ? estadoHint(contadores.casos_por_estado, 'pendiente_juez') : undefined} />
-        <StatCard label="Órdenes" value={sumValues(contadores?.ordenes_por_estado)} hint={contadores ? estadoHint(contadores.ordenes_por_estado, 'aplicada') : undefined} />
+        <StatCard label="Minuto de partido" icon={Activity} value={reloj ? `${reloj.minuto_actual}` : '—'} hint={reloj ? `fin ${reloj.fin_min} · x${reloj.acelerar}` : 'simulador sin conexión'} accent={reloj?.finalizado ? 'text-zinc-300' : 'text-cyan-300'} />
+        <StatCard label="Detecciones vistas" icon={Radar} value={contadores?.detecciones_vistas ?? '—'} hint="deduplicadas por el poller" />
+        <StatCard label="Expedientes" icon={FileText} value={sumValues(contadores?.casos_por_estado)} hint={contadores ? estadoHint(contadores.casos_por_estado, 'pendiente_juez') : undefined} />
+        <StatCard label="Órdenes" icon={ClipboardList} value={sumValues(contadores?.ordenes_por_estado)} hint={contadores ? estadoHint(contadores.ordenes_por_estado, 'aplicada') : undefined} />
       </div>
 
       <div className="grid lg:grid-cols-2 gap-5">
-        <ShieldCard title="Feed de detecciones" subtitle="Últimas del simulador con veredicto del motor">
+        <ShieldCard
+          title="Feed de detecciones"
+          subtitle="Últimas del simulador con veredicto del motor"
+          actions={detections.error && detections.data ? <StaleWarning hint={detections.error} /> : undefined}
+        >
           {detections.loading && !detections.data ? (
-            <LoadingState />
+            <SkeletonRows rows={4} />
+          ) : detections.error && !detections.data ? (
+            <ErrorState>{detections.error}</ErrorState>
           ) : (detections.data?.detecciones.length ?? 0) === 0 ? (
             <EmptyState>Sin detecciones todavía — iniciá el run para comenzar el feed.</EmptyState>
           ) : (
             <ul className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
               {[...(detections.data?.detecciones ?? [])].reverse().map((d) => (
-                <li key={d.id} className="rounded-lg border border-white/5 bg-white/2 px-3 py-2 text-xs">
+                <li key={d.id} className="rounded-lg border border-white/5 bg-white/2 px-3 py-2 text-xs hover:border-white/10 transition-colors">
                   <div className="flex items-center gap-2 flex-wrap">
                     <MinutoChip min={d.minuto} />
                     <code className="font-mono text-cyan-300/90">{d.id}</code>
@@ -105,7 +119,10 @@ export function ShieldMonitorPage() {
                       <span className="text-white/40">veredicto: {veredictos.get(d.id)}</span>
                     )}
                     {d.expediente_id ? (
-                      <Link to={`/shield/cases/${d.expediente_id}`} className="ml-auto text-cyan-400 hover:text-cyan-300 font-mono">
+                      <Link
+                        to={`/shield/cases/${d.expediente_id}`}
+                        className="ml-auto text-cyan-400 hover:text-cyan-300 font-mono rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50"
+                      >
                         {d.expediente_id}
                       </Link>
                     ) : (
@@ -120,9 +137,15 @@ export function ShieldMonitorPage() {
           )}
         </ShieldCard>
 
-        <ShieldCard title="Órdenes por ISP" subtitle="Estado reportado por el proveedor">
+        <ShieldCard
+          title="Órdenes por ISP"
+          subtitle="Estado reportado por el proveedor"
+          actions={orders.error && orders.data ? <StaleWarning hint={orders.error} /> : undefined}
+        >
           {orders.loading && !orders.data ? (
-            <LoadingState />
+            <SkeletonRows rows={4} />
+          ) : orders.error && !orders.data ? (
+            <ErrorState>{orders.error}</ErrorState>
           ) : (orders.data?.orders.length ?? 0) === 0 ? (
             <EmptyState>Ninguna orden compuesta todavía.</EmptyState>
           ) : (
@@ -130,14 +153,17 @@ export function ShieldMonitorPage() {
               {[...(orders.data?.orders ?? [])]
                 .sort((a, b) => b.creada_min - a.creada_min || b.orden_id.localeCompare(a.orden_id))
                 .map((o) => (
-                  <li key={o.orden_id} className="rounded-lg border border-white/5 bg-white/2 px-3 py-2 text-xs">
+                  <li key={o.orden_id} className="rounded-lg border border-white/5 bg-white/2 px-3 py-2 text-xs hover:border-white/10 transition-colors">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-mono text-white/75">{o.proveedor_id}</span>
                       <OrderStateBadge estado={o.estado} />
                       {o.intento !== undefined && o.intento > 1 && (
-                        <span className="text-amber-300/80">intento {o.intento}</span>
+                        <span className="text-amber-300/80 tabular-nums">intento {o.intento}</span>
                       )}
-                      <Link to={`/shield/cases/${o.expediente_id}`} className="ml-auto text-cyan-400 hover:text-cyan-300 font-mono">
+                      <Link
+                        to={`/shield/cases/${o.expediente_id}`}
+                        className="ml-auto text-cyan-400 hover:text-cyan-300 font-mono rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50"
+                      >
                         {o.expediente_id}
                       </Link>
                     </div>
@@ -151,37 +177,33 @@ export function ShieldMonitorPage() {
         </ShieldCard>
       </div>
 
-      <ShieldCard title="Eventos recientes" subtitle="Cola de auditoría en vivo (append-only)">
-        {(audit.data?.entries.length ?? 0) === 0 ? (
+      <ShieldCard
+        title="Eventos recientes"
+        subtitle="Cola de auditoría en vivo (append-only)"
+        actions={audit.error && audit.data ? <StaleWarning hint={audit.error} /> : undefined}
+      >
+        {audit.error && !audit.data ? (
+          <ErrorState>{audit.error}</ErrorState>
+        ) : (audit.data?.entries.length ?? 0) === 0 ? (
           <EmptyState>Sin eventos auditados todavía.</EmptyState>
         ) : (
           <ul className="space-y-1 max-h-[300px] overflow-y-auto pr-1">
             {[...(audit.data?.entries ?? [])].reverse().map((e) => (
               <li key={e.seq} className="flex items-baseline gap-3 text-xs py-1 border-b border-white/3 last:border-0">
-                <span className="text-white/25 font-mono w-10 shrink-0">#{e.seq}</span>
+                <span className="text-white/25 font-mono w-10 shrink-0 tabular-nums">#{e.seq}</span>
                 <MinutoChip min={e.min_sim} />
                 <span className="text-white/70 font-medium">{e.evento}</span>
                 {e.expediente_id && (
-                  <Link to={`/shield/cases/${e.expediente_id}`} className="text-cyan-400/80 hover:text-cyan-300 font-mono">
+                  <Link to={`/shield/cases/${e.expediente_id}`} className="text-cyan-400/80 hover:text-cyan-300 font-mono rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50">
                     {e.expediente_id}
                   </Link>
                 )}
-                <span className="ml-auto text-white/25 font-mono">{new Date(e.ts_iso).toLocaleTimeString('es-AR')}</span>
+                <span className="ml-auto text-white/25 font-mono tabular-nums">{new Date(e.ts_iso).toLocaleTimeString('es-AR')}</span>
               </li>
             ))}
           </ul>
         )}
       </ShieldCard>
-    </div>
-  );
-}
-
-function StatCard({ label, value, hint, accent = 'text-white' }: { label: string; value: string | number; hint?: string; accent?: string }) {
-  return (
-    <div className="glass-card-static p-4">
-      <p className="text-[10px] uppercase tracking-wider text-white/30">{label}</p>
-      <p className={`text-2xl font-bold mt-1 ${accent}`}>{value}</p>
-      {hint && <p className="text-[11px] text-white/30 mt-0.5">{hint}</p>}
     </div>
   );
 }
@@ -212,3 +234,4 @@ function verdictMap(entries: AuditEntry[]): Map<string, string> {
   }
   return map;
 }
+

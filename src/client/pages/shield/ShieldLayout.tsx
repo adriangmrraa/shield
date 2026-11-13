@@ -46,19 +46,19 @@ export function ShieldLayout() {
             </div>
           </div>
 
-          <nav className="hidden md:flex items-center gap-1 ml-6">
+          <nav className="hidden md:flex items-center gap-1 ml-6" aria-label="Navegación principal">
             {NAV.map(({ to, icon: Icon, label, end }) => (
               <NavLink
                 key={to}
                 to={to}
                 end={end}
                 className={({ isActive }) =>
-                  `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50 ${
                     isActive ? 'bg-cyan-500/15 text-cyan-300' : 'text-white/45 hover:text-white/75 hover:bg-white/5'
                   }`
                 }
               >
-                <Icon className="w-3.5 h-3.5" />
+                <Icon className="w-3.5 h-3.5" aria-hidden />
                 {label}
               </NavLink>
             ))}
@@ -67,10 +67,10 @@ export function ShieldLayout() {
           <div className="ml-auto flex items-center gap-3 text-xs">
             <div className="hidden sm:flex items-center gap-1.5 rounded-lg bg-white/4 border border-white/8 px-2.5 py-1">
               <span className="text-white/35">Minuto</span>
-              <span className="font-mono font-semibold text-cyan-300" data-testid="minuto-actual">
+              <span className="font-mono font-semibold text-cyan-300 tabular-nums" data-testid="minuto-actual">
                 {minuto ?? '—'}
               </span>
-              {status?.reloj?.fin_min !== undefined && <span className="text-white/25">/ {status.reloj?.fin_min}</span>}
+              {status?.reloj?.fin_min !== undefined && <span className="text-white/25 tabular-nums">/ {status.reloj?.fin_min}</span>}
             </div>
 
             <div className="hidden lg:flex flex-col items-end leading-tight">
@@ -85,28 +85,32 @@ export function ShieldLayout() {
             </div>
 
             <div
-              className={`flex items-center gap-1 rounded-full px-2 py-1 border text-[10px] font-semibold uppercase tracking-wider ${
+              className={`flex items-center gap-1.5 rounded-full px-2 py-1 border text-[10px] font-semibold uppercase tracking-wider ${
                 connected
                   ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
                   : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
               }`}
               title={connected ? 'Tiempo real por socket' : 'Socket caído — actualizando por polling cada 5 s'}
+              role="status"
+              aria-live="polite"
             >
-              <Radio className="w-3 h-3" />
+              <span className={`size-1.5 rounded-full ${connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} aria-hidden />
+              <Radio className="w-3 h-3" aria-hidden />
               {connected ? 'En vivo' : 'Polling'}
             </div>
 
             <button
               onClick={logout}
-              className="p-1.5 rounded-lg text-white/40 hover:text-white/80 hover:bg-white/5 transition-colors"
+              className="p-1.5 rounded-lg text-white/40 hover:text-white/80 hover:bg-white/5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50"
               title="Cerrar sesión judicial"
+              aria-label="Cerrar sesión judicial"
             >
-              <LogOut className="w-4 h-4" />
+              <LogOut className="w-4 h-4" aria-hidden />
             </button>
           </div>
         </div>
 
-        <nav className="md:hidden flex items-center gap-1 px-3 pb-2 overflow-x-auto">
+        <nav className="md:hidden flex items-center gap-1 px-3 pb-2 overflow-x-auto" aria-label="Navegación principal móvil">
           {NAV.map(({ to, icon: Icon, label, end }) => (
             <NavLink
               key={to}

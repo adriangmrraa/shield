@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { FileText } from 'lucide-react';
 import { shieldApi, ShieldApiError } from './shieldApi';
 import { useShield } from './ShieldContext';
 import { useShieldLive } from './useShieldSocket';
 import { CaseStateBadge, SharedIpBadge, TipoBadge } from './components/badges';
-import { EmptyState, ErrorState, LoadingState, MinutoChip, ShieldCard } from './components/shared';
+import { EmptyState, ErrorState, MinutoChip, ShieldCard, SkeletonRows } from './components/shared';
 import { TrayActions } from './components/TrayActions';
 import type { CasesResponse, ExpedienteConPermiso } from './shieldTypes';
 
@@ -24,8 +24,16 @@ export function ShieldTrayPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const cases = data?.cases ?? [];
   const soyDeTurno = data?.juez_turno_actual != null && data.juez_turno_actual === juez?.juez_id;
+
+  // Signable cases float to the top: the judge's actionable work first,
+  // then anything blocked by shift/assignment, keeping original order inside
+  // each bucket so the list stays stable across refreshes.
+  const cases = useMemo(
+    () => (data?.cases ?? []).slice().sort((a, b) => Number(b.can_sign) - Number(a.can_sign)),
+    [data?.cases],
+  );
+  const signableCount = useMemo(() => cases.filter((c) => c.can_sign).length, [cases]);
 
   const run = async (exp: ExpedienteConPermiso, action: () => Promise<{ ordenes?: unknown[] }>, okMessage: string) => {
     setBusyId(exp.expediente_id);
@@ -80,22 +88,28 @@ export function ShieldTrayPage() {
       </div>
 
       {notice && (
-        <div className="p-3 rounded-xl bg-emerald-500/8 border border-emerald-500/15 text-emerald-300 text-sm">{notice}</div>
+        <div className="p-3 rounded-xl bg-emerald-500/8 border border-emerald-500/15 text-emerald-300 text-sm" role="status">
+          {notice}
+        </div>
       )}
       {actionError && <ErrorState>{actionError}</ErrorState>}
       {error && <ErrorState>{error}</ErrorState>}
       {data && !data.simulador_disponible && (
-        <div className="p-3 rounded-xl bg-amber-500/8 border border-amber-500/15 text-amber-300 text-sm">
+        <div className="p-3 rounded-xl bg-amber-500/8 border border-amber-500/15 text-amber-300 text-sm" role="status">
           El simulador no responde: la bandeja muestra el último estado persistido y la firma queda deshabilitada.
         </div>
       )}
 
       <ShieldCard
         title={`Expedientes pendientes (${cases.length})`}
-        subtitle="Se reasignan automáticamente al juez que entra de turno"
+        subtitle={
+          signableCount > 0
+            ? `${signableCount} listo${signableCount === 1 ? '' : 's'} para firmar — se reasignan al juez que entra de turno`
+            : 'Se reasignan automáticamente al juez que entra de turno'
+        }
       >
         {loading && cases.length === 0 ? (
-          <LoadingState />
+          <SkeletonRows rows={3} />
         ) : cases.length === 0 ? (
           <EmptyState>No hay expedientes pendientes de decisión judicial.</EmptyState>
         ) : (
@@ -124,14 +138,19 @@ function TrayRow({ exp, busy, onApprove, onReject }: {
 }) {
   const medidaResumen = resumenMedidas(exp.medidas_por_isp);
   return (
-    <li className="py-4 flex flex-col lg:flex-row lg:items-center gap-4">
+    <li
+      className={`py-4 px-3 -mx-3 rounded-xl flex flex-col lg:flex-row lg:items-center gap-4 transition-colors ${
+        exp.can_sign ? 'hover:bg-white/2' : 'opacity-80'
+      }`}
+    >
       <div className="flex-1 min-w-0 space-y-1.5">
         <div className="flex flex-wrap items-center gap-2">
           <Link
             to={`/shield/cases/${exp.expediente_id}`}
-            className="font-mono text-sm text-cyan-300 hover:text-cyan-200 inline-flex items-center gap-1.5"
+            className="font-mono text-sm text-cyan-300 hover:text-cyan-200 inline-flex items-center gap-1.5 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50"
+            aria-label={`Abrir expediente ${exp.expediente_id}`}
           >
-            <FileText className="w-3.5 h-3.5" />
+            <FileText className="w-3.5 h-3.5" aria-hidden />
             {exp.expediente_id}
           </Link>
           <CaseStateBadge estado={exp.estado} />
@@ -143,7 +162,7 @@ function TrayRow({ exp, busy, onApprove, onReject }: {
           <span className="text-white/25 mx-2">·</span>
           <span className="text-white/40">Host:</span> {exp.host_stream}
           <span className="text-white/25 mx-2">·</span>
-          <span className="text-white/40">IP:</span> {exp.ip_servidor}
+          <span className="text-white/40">IP:</span> <span className="font-mono">{exp.ip_servidor}</span>
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-white/40">

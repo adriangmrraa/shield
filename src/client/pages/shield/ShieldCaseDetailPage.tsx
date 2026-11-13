@@ -4,7 +4,7 @@ import { shieldApi } from './shieldApi';
 import { useShield } from './ShieldContext';
 import { useShieldLive } from './useShieldSocket';
 import { CaseStateBadge, OrderStateBadge, SharedIpBadge, TipoBadge } from './components/badges';
-import { EmptyState, ErrorState, Firma, KeyValue, LoadingState, MinutoChip, ShieldCard } from './components/shared';
+import { EmptyState, ErrorState, Firma, KeyValue, MinutoChip, ShieldCard, SkeletonRows, StaleWarning, formatAuditDatos } from './components/shared';
 import type { AuditEntry, CaseDetailResponse, DetectionsResponse } from './shieldTypes';
 
 // VISTA 2 — Caso y evidencia (spec §13): the full expediente with linked
@@ -31,15 +31,19 @@ export function ShieldCaseDetailPage() {
   const linkedDetections = (detections.data?.detecciones ?? []).filter((d) => exp?.deteccion_ids.includes(d.id));
   const timeline = (audit.data?.entries ?? []).filter((e) => e.expediente_id === exp?.expediente_id).reverse();
 
-  if (detail.loading && !exp) return <LoadingState />;
+  if (detail.loading && !exp) return <SkeletonRows rows={4} />;
   if (detail.error && !exp) return <ErrorState>{detail.error}</ErrorState>;
   if (!exp) return <EmptyState>Expediente no encontrado.</EmptyState>;
 
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3">
-        <Link to="/shield" className="p-1.5 rounded-lg text-white/40 hover:text-white/80 hover:bg-white/5">
-          <ArrowLeft className="w-4 h-4" />
+        <Link
+          to="/shield"
+          className="p-1.5 rounded-lg text-white/40 hover:text-white/80 hover:bg-white/5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50"
+          aria-label="Volver a la bandeja del juez"
+        >
+          <ArrowLeft className="w-4 h-4" aria-hidden />
         </Link>
         <div className="flex flex-wrap items-center gap-2.5">
           <h1 className="text-lg font-semibold font-mono text-white">{exp.expediente_id}</h1>
@@ -184,8 +188,14 @@ export function ShieldCaseDetailPage() {
         )}
       </ShieldCard>
 
-      <ShieldCard title="Línea de tiempo del expediente" subtitle="Eventos auditados (append-only)">
-        {timeline.length === 0 ? (
+      <ShieldCard
+        title="Línea de tiempo del expediente"
+        subtitle="Eventos auditados (append-only)"
+        actions={audit.error && audit.data ? <StaleWarning hint={audit.error} /> : undefined}
+      >
+        {audit.error && !audit.data ? (
+          <ErrorState>{audit.error}</ErrorState>
+        ) : timeline.length === 0 ? (
           <EmptyState>Sin eventos de auditoría para este expediente.</EmptyState>
         ) : (
           <ol className="relative border-l border-white/10 ml-2 space-y-3">
@@ -239,11 +249,11 @@ function intentoDesdeId(ordenId: string): number {
 }
 
 function TimelineDatos({ datos }: { datos: Record<string, unknown> }) {
-  const entries = Object.entries(datos).filter(([, v]) => v !== null && v !== undefined && v !== '');
-  if (entries.length === 0) return null;
+  const line = formatAuditDatos(datos);
+  if (!line) return null;
   return (
-    <p className="text-[11px] text-white/35 mt-0.5 break-words">
-      {entries.map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`).join(' · ')}
+    <p className="text-[11px] text-white/35 mt-0.5 break-words font-mono">
+      {line}
     </p>
   );
 }

@@ -40,8 +40,9 @@ const CASE_BADGES: Record<EstadoExpediente, BadgeSpec> = {
 function ShieldBadge({ spec }: { spec: BadgeSpec }) {
   return (
     <span
-      className={`inline-flex items-center whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${spec.className}`}
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${spec.className}`}
     >
+      <span className="size-1.5 rounded-full bg-current" aria-hidden />
       {spec.label}
     </span>
   );
@@ -69,8 +70,9 @@ export function SharedIpBadge() {
   return (
     <span
       title="IP compartida con dominios legítimos: por daño colateral la medida segura es solo dominio"
-      className="inline-flex items-center whitespace-nowrap rounded-full border border-orange-500/30 bg-orange-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-orange-300"
+      className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-orange-500/30 bg-orange-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-orange-300"
     >
+      <span className="size-1.5 rounded-full bg-current" aria-hidden />
       IP compartida — solo dominio
     </span>
   );

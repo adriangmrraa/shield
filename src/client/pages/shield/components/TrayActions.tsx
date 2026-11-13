@@ -38,6 +38,8 @@ export function TrayActions({ canSign, disabledReason, busy, onApprove, onReject
           value={motivo}
           onChange={(e) => setMotivo(e.target.value)}
           rows={2}
+          autoFocus
+          aria-required
           className="input-premium text-sm resize-none"
           placeholder="Ej.: evidencia insuficiente, medida desproporcionada…"
         />
